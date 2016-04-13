@@ -1,0 +1,18 @@
+/*app_trust.fraud_defect_fraudflag_wk.del_ins.sql*/
+INSERT INTO APP_TRUST_W.JW_TEMP1_W
+(
+ USER_ID                       
+,INR                           
+,BBE                           
+)
+SELECT five.user_id, INR_flag AS INR, defect_flag AS BBE 
+FROM (SELECT s.user_id, s.date_rpt,  s.week_id,   s.month_id,  b.trans_dt,  b.INR_flag, b.defect_flag           
+   FROM PRS_RESTRICTED_V.ebay_trans_rltd_event b
+   INNER JOIN  other_susp_2014 s
+   ON b.slr_id=s.user_id AND b.trans_dt<=s.date_rpt AND auct_type_code NOT IN (10,12,15)   AND BYR_ATO_YN_IND  =  0 AND rprtd_wacko_yn_ind = 'N' AND CORE_CATEG_IND = 1          
+   where b.trans_dt > 1130101
+  
+  ) five   
+GROUP BY 1
+HAVING INR>0 OR BBE>0 
+;

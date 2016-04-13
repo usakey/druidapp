@@ -1,0 +1,212 @@
+insert into ddm_data_assets_t.ds_fe_asset_usage_sd
+(
+cal_dt,
+nt_login,
+user_batch_ind,
+user_persona_id,
+fe_asset_id,
+fe_asset_name,
+fe_asset_alias_name,
+fe_asset_type_cd,
+prdctn_ind,
+pltfrm_id,
+fe_prjct_id,
+leaf_team_id,
+cert_ind,
+cert_dt,
+prdct_id,
+src_cre_nt_login,
+access_cnt
+)
+sel
+  w.cal_dt,
+  w.nt_login,
+  case when ldap.uid is not null then 2
+ --      when ldap.uid1 = 0 then 3
+ --      when ldap.uid2 = 1 then 4 
+       else 1 end as user_batch_ind,
+  case when user_batch_ind=1 then 8
+       else coalesce(p.user_persona_id,1) end as user_persona_id,
+  asset.fe_asset_id,
+  asset.fe_asset_name,
+  asset.fe_asset_alias_name,
+  1 as fe_asset_type_cd,
+  asset.prdctn_ind,
+  6  as pltfrm_id,  --tableau
+  w.prjct_id,
+  asset.leaf_team_id,
+  asset.cert_ind,
+  asset.cert_dt,
+  asset.prdct_id,
+  asset.src_cre_nt_login,
+  w.access_cnt
+from ddm_data_assets_w.ds_tableau_rpt_usage_dtl_w w
+join (select a.*,row_number() over (partition by lctn_txt order by src_cre_dt desc) as rn from ddm_data_assets_t.ds_fe_asset a) asset
+on w.lctn_txt=asset.lctn_txt
+and asset.pltfrm_id=6  --tableau
+and asset.rn=1
+left join 
+ ( select uid from corp_hr_v.ldap_emply
+   group by 1) ldap
+on w.nt_login=ldap.uid
+left join ddm_ram_t.ds_user_persona_info_hist p
+on w.nt_login=p.nt_login
+and w.cal_dt>=p.start_dt
+and w.cal_dt<p.end_dt
+where w.cal_dt>=cast('20151023' as date format 'yyyymmdd')-5
+and w.cal_dt<cast('20151024' as date format 'yyyymmdd')
+;
+
+/*dw_pymt.pymt_rrp_flow.ups.sql*/
+INSERT INTO gdw_tables.PYMT_RRP_FLOW
+(
+    RRP_FLOW_ID
+    ,FLOW_NAME
+    ,CLNT_ID
+    ,EXTRNL_UNQ_ID
+    ,EXTRNL_REF_ID
+    ,CUR_ACTVTY_ID
+    ,RRP_FLOW_STS_ID
+    ,ORDER_ID
+    ,FLAGS
+    ,SRC_CRE_DT
+    ,SRC_CRE_TM
+    ,SRC_LAST_MDFD_DT
+    ,SRC_LAST_MDFD_TM
+    ,ERROR_CD
+    ,CRE_DATE
+    ,CRE_USER
+)
+SELECT
+    src.RRP_FLOW_ID
+    ,src.FLOW_NAME
+    ,src.CLNT_ID
+    ,src.EXTRNL_UNQ_ID
+    ,src.EXTRNL_REF_ID
+    ,src.CUR_ACTVTY_ID
+    ,src.RRP_FLOW_STS_ID
+    ,src.ORDER_ID
+    ,src.FLAGS
+    ,CAST(src.SRC_CRE_DT AS DATE FORMAT 'YYYY-MM-DD')
+    ,CAST(src.SRC_CRE_DT AS TIME(0) FORMAT 'HH:MI:SS')
+    ,CAST(src.SRC_LAST_MDFD_DT AS DATE FORMAT 'YYYY-MM-DD')
+    ,CAST(src.SRC_LAST_MDFD_DT AS TIME(0) FORMAT 'HH:MI:SS')
+    ,src.ERROR_CD
+    ,DATE
+    ,USER
+FROM working.STG_PYMT_RRP_FLOW_W src
+LEFT JOIN gdw_tables.PYMT_RRP_FLOW tgt
+ON tgt.RRP_FLOW_ID = src.RRP_FLOW_ID
+WHERE tgt.RRP_FLOW_ID IS NULL;
+
+/*dw_pymt.dw_pymt_jnl_cfg.ups.sql*/
+INSERT INTO gdw_tables.DW_PYMT_JNL_CFG
+(
+         PYMT_JNL_CFG_ID                                   
+        ,PYMT_LDGR_ID                                      
+        ,PYMT_ACCT_ID                                      
+        ,START_DT                                          
+        ,START_TM                                          
+        ,END_DT                                            
+        ,END_TM                                            
+        ,SRC_LAST_MDFD_USER                                
+        ,SRC_CRE_DT                                        
+        ,SRC_CRE_TM                                        
+        ,SRC_LAST_MDFD_DT                                  
+        ,SRC_LAST_MDFD_TM                                  
+)
+SELECT
+         src.PMT_JOURNAL_CONFIG_ID                         
+        ,src.PMT_LEDGER_ID                                 
+        ,src.ACCOUNT_ID                                    
+        ,cast(src.EFFECTIVE_START_DATE as DATE)            
+        ,cast(src.EFFECTIVE_START_DATE as TIME(0))         
+        ,cast(src.EFFECTIVE_END_DATE as DATE)              
+        ,cast(src.EFFECTIVE_END_DATE as TIME(0))           
+        ,src.LAST_MODIFIED_BY                              
+        ,cast(src.CREATION_DATE as DATE)                   
+        ,cast(src.CREATION_DATE as TIME(0))                
+        ,cast(src.LAST_MODIFIED_DATE as DATE)              
+        ,cast(src.LAST_MODIFIED_DATE as TIME(0))           
+FROM
+ working.STG_DW_PYMT_JNL_CFG_W src
+
+;
+
+/*app_trust.fraud_dash_data.del_ins.sql*/
+INSERT INTO APP_TRUST_T.dash_AllSources 
+(
+ source_id
+,source_type
+)
+SELECT 
+ source_id 
+,CASE WHEN source_type IN (1,4) 
+           AND NOT (INDEX(source_id,'=') > 0) 
+     AND NOT (INDEX(source_id,'%') > 0) 
+     AND TRIM(source_id) NOT BETWEEN '0' 
+     AND '9999999999999999' 
+     THEN 3 
+     ELSE source_type END AS source_type 
+FROM 
+(
+SELECT 
+  source_id
+, source_type
+, is_active
+, COUNT(*) c
+, MIN(source_type) m 
+FROM ebay_ts_v.cw_source_detail
+WHERE source_id IS NOT NULL 
+GROUP BY source_id, source_type, is_active) q 
+--QUALIFY 1 = ROW_NUMBER() OVER(PARTITION BY source_id ORDER BY source_id, is_active DESC, c DESC, m) 
+;
+
+/*app_trust.fraud_defect_fraudflag_wk.del_ins.sql*/
+INSERT INTO APP_TRUST_W.JW_TEMP1_W
+(
+ USER_ID                       
+,INR                           
+,BBE                           
+)
+SEL five.user_id, SUM(INR_flag) AS INR, SUM(defect_flag) AS BBE 
+FROM (SEL s.user_id, s.date_rpt,  s.week_id,   s.month_id,  b.trans_dt,  b.INR_flag, b.defect_flag           
+   FROM PRS_RESTRICTED_V.ebay_trans_rltd_event b
+   INNER JOIN  other_susp_2014 s
+   ON b.slr_id=s.user_id AND b.trans_dt<=s.date_rpt AND auct_type_code NOT IN (10,12,15)   AND BYR_ATO_YN_IND  =  0 AND rprtd_wacko_yn_ind = 'N' AND CORE_CATEG_IND = 1          
+   where b.trans_dt > 1130101
+  --QUALIFY ROW_NUMBER() OVER( PARTITION BY user_id ORDER BY b.trans_dt ASC) <=5
+  ) five   
+GROUP BY 1
+HAVING INR>0 OR BBE>0 
+;
+
+/*data_assets.ds_fe_amip_prjct.ups.sql*/
+insert into ddm_data_assets_t.ds_fe_prjct 
+(
+fe_prjct_id,
+fe_prjct_name,
+pltfrm_id,
+leaf_team_id,
+start_dt,
+end_dt
+)
+select 
+  row_number() over (order by src.prjct_name) + m.max_id,
+  src.prjct_name,
+  9 as pltfrm_id,  --tool
+  98969 as leaf_team_id, --OPS
+  date as start_dt,
+  '9999-12-31' as end_dt
+from ( select prjct_name from ddm_data_assets_w.ds_fe_amip_prjct_w
+       group by 1) src
+left join ddm_data_assets_t.ds_fe_prjct tgt
+on tgt.pltfrm_id=9 --tool
+and src.prjct_name=tgt.fe_prjct_name
+and tgt.end_dt='9999-12-31'
+cross join 
+(select coalesce(max(fe_prjct_id),0) as max_id from ddm_data_assets_t.ds_fe_prjct
+ where pltfrm_id=9 --tool
+  ) m
+where tgt.fe_prjct_name is null
+;

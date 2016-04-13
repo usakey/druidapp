@@ -1,0 +1,3 @@
+target_database,target_table,tartet_column,source_database,source_table,source_column
+ddm_data_assets_t,ds_fe_prjct,fe_prjct_name,ddm_data_assets_w,ds_fe_amip_prjct_w,prjct_name,
+ddm_data_assets_t,ds_fe_prjct,fe_prjct_id,ddm_data_assets_t,ds_fe_prjct,fe_prjct_id,

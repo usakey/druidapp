@@ -1,0 +1,29 @@
+/*data_assets.ds_fe_amip_prjct.ups.sql*/
+insert into ddm_data_assets_t.ds_fe_prjct 
+(
+fe_prjct_id,
+fe_prjct_name,
+pltfrm_id,
+leaf_team_id,
+start_dt,
+end_dt
+)
+select 
+  row_number() over (order by src.prjct_name) + m.max_id,
+  src.prjct_name,
+  9 as pltfrm_id,  --tool
+  98969 as leaf_team_id, --OPS
+  date as start_dt,
+  '9999-12-31' as end_dt
+from ( select prjct_name from ddm_data_assets_w.ds_fe_amip_prjct_w
+       group by 1) src
+left join ddm_data_assets_t.ds_fe_prjct tgt
+on tgt.pltfrm_id=9 --tool
+and src.prjct_name=tgt.fe_prjct_name
+and tgt.end_dt='9999-12-31'
+cross join 
+(select coalesce(max(fe_prjct_id),0) as max_id from ddm_data_assets_t.ds_fe_prjct
+ where pltfrm_id=9 --tool
+  ) m
+where tgt.fe_prjct_name is null
+;
