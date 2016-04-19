@@ -1,58 +1,33 @@
-insert into ddm_data_assets_t.ds_fe_asset_usage_sd
+insert into target_database.target_table
 (
-cal_dt,
-nt_login,
-user_batch_ind,
-user_persona_id,
-fe_asset_id,
-fe_asset_name,
-fe_asset_alias_name,
-fe_asset_type_cd,
-prdctn_ind,
-pltfrm_id,
-fe_prjct_id,
-leaf_team_id,
-cert_ind,
-cert_dt,
-prdct_id,
-src_cre_nt_login,
-access_cnt
+  col1,
+  col2,
+  col3
 )
-sel
-  w.cal_dt,
-  w.nt_login,
-  case when ldap.uid is not null then 2
- --      when ldap.uid1 = 0 then 3
- --      when ldap.uid2 = 1 then 4 
-       else 1 end as user_batch_ind,
-  case when user_batch_ind=1 then 8
-       else coalesce(p.user_persona_id,1) end as user_persona_id,
-  asset.fe_asset_id,
-  asset.fe_asset_name,
-  asset.fe_asset_alias_name,
-  1 as fe_asset_type_cd,
-  asset.prdctn_ind,
-  6  as pltfrm_id,  --tableau
-  w.prjct_id,
-  asset.leaf_team_id,
-  asset.cert_ind,
-  asset.cert_dt,
-  asset.prdct_id,
-  asset.src_cre_nt_login,
-  w.access_cnt
-from ddm_data_assets_w.ds_tableau_rpt_usage_dtl_w w
-join (select a.*,row_number() over (partition by lctn_txt order by src_cre_dt desc) as rn from ddm_data_assets_t.ds_fe_asset a) asset
-on w.lctn_txt=asset.lctn_txt
-and asset.pltfrm_id=6  --tableau
-and asset.rn=1
-left join 
- ( select uid from corp_hr_v.ldap_emply
-   group by 1) ldap
-on w.nt_login=ldap.uid
-left join ddm_ram_t.ds_user_persona_info_hist p
-on w.nt_login=p.nt_login
-and w.cal_dt>=p.start_dt
-and w.cal_dt<p.end_dt
-where w.cal_dt>=cast('20151023' as date format 'yyyymmdd')-5
-and w.cal_dt<cast('20151024' as date format 'yyyymmdd')
-;
+select 
+col1,
+sum(col2),
+sum(col3)
+from
+(
+  select 
+  c1 as col1,
+  case when s1.id != null then 1
+  when s1.index != null then 2
+  else 0 end as col2,
+  sum(s1.c3) as col3
+  from
+  source_database.source_table_1 s1
+
+  union all
+
+  select 
+  c1 as col1,
+  case when s2.id != null then 1
+  when s2.index != null then 2
+  else 0 end as col2,
+  sum(s2.c3) as col3
+  from
+  source_database.source_table_2 s2
+) x
+where x.col2 != null;
