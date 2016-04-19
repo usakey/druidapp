@@ -192,15 +192,20 @@ public class ColumnImpact {
 						SQLObject sqlObj = ((TeradataSchemaStatVisitor) fromVisitor).getAliasQuery(key);
 						TeradataSchemaStatVisitor newVisitor = new TeradataSchemaStatVisitor();
 						sqlObj.accept(newVisitor);
-						for (Column col : newVisitor.getColumns()) {
-							String newTableName = col.getTable();
-			    			String newColName = col.getName();
-			    			if (!newColName.equalsIgnoreCase(colName_lcase)) {
-			    				toRealColumn(expr, fromVisitor, targetCols, newTableName, newColName, aliMap);	
-			    			} else {
-			    				concatColumn(fromVisitor, targetCols, newTableName, newColName, aliMap);
-			    			}
+						if (!newVisitor.getColumns().isEmpty()) {
+							for (Column col : newVisitor.getColumns()) {
+								String newTableName = col.getTable();
+				    			String newColName = col.getName();
+				    			if (!newColName.equalsIgnoreCase(colName_lcase)) {
+				    				toRealColumn(expr, fromVisitor, targetCols, newTableName, newColName, aliMap);	
+				    			} else {
+				    				concatColumn(fromVisitor, targetCols, newTableName, newColName, aliMap);
+				    			}
+							}
+						} else {
+							concatColumn(fromVisitor, targetCols, tbName_lcase, colName_lcase, aliMap);
 						}
+						
 						break;
 					}
 				}				
