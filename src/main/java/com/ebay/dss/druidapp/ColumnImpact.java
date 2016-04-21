@@ -16,8 +16,13 @@ import com.alibaba.druid.sql.ast.expr.SQLCastExpr;
 import com.alibaba.druid.sql.ast.expr.SQLIdentifierExpr;
 import com.alibaba.druid.sql.ast.expr.SQLMethodInvokeExpr;
 import com.alibaba.druid.sql.ast.expr.SQLPropertyExpr;
+import com.alibaba.druid.sql.ast.statement.SQLExprTableSource;
+import com.alibaba.druid.sql.ast.statement.SQLInsertStatement;
 import com.alibaba.druid.sql.ast.statement.SQLSelect;
+import com.alibaba.druid.sql.ast.statement.SQLSelectQuery;
+import com.alibaba.druid.sql.ast.statement.SQLSelectQueryBlock;
 import com.alibaba.druid.sql.ast.statement.SQLTableSource;
+import com.alibaba.druid.sql.ast.statement.SQLUnionQuery;
 import com.alibaba.druid.sql.dialect.teradata.ast.stmt.TeradataInsertStatement;
 import com.alibaba.druid.sql.dialect.teradata.ast.stmt.TeradataSelectQueryBlock;
 import com.alibaba.druid.sql.dialect.teradata.visitor.TeradataSchemaStatVisitor;
@@ -40,54 +45,80 @@ public class ColumnImpact {
     	if (stmt instanceof TeradataInsertStatement) {
     		TeradataInsertStatement insertStmt = (TeradataInsertStatement) stmt;
     		SQLSelect insertQuery = insertStmt.getQuery();
-    		TeradataSelectQueryBlock insertBlock = (TeradataSelectQueryBlock) insertQuery.getQuery();
-
-			TeradataSchemaStatVisitor fromVisitor = new TeradataSchemaStatVisitor();
-    		SQLTableSource tableSource = insertBlock.getFrom();
-    		tableSource.accept(fromVisitor);
     		
-    		if (insertStmt.getColumns() != null 
-    				&& insertBlock.getSelectList() != null 
-    				&& insertStmt.getColumns().size() == insertBlock.getSelectList().size()) {
-    			for (int i=0; i<insertStmt.getColumns().size(); i++) {
-    				String fullTargetCol = insertStmt.getTableName() 
-    						+ "." 
-    						+ insertStmt.getColumns().get(i).toString();
-    				
-    				System.out.println(insertBlock.getSelectList().get(i));
-    				
-    				SQLExpr sExpr = insertBlock.getSelectList().get(i).getExpr();
-    				
-					TeradataSchemaStatVisitor visitor1 = new TeradataSchemaStatVisitor();
-					
-    				exprToColumn(sExpr, visitor1, fullTargetCol, aliasMap, fromVisitor);
-
-    				// map target col to source col
-    				List<String> fullSourceCol = dependMap.get(fullTargetCol);
-    				if(fullSourceCol != null && !fullSourceCol.isEmpty()) {
-    					for (String aliasSourceCol : fullSourceCol) {
-        					if (aliasSourceCol.split("\\.").length == 2) {
-        						String sourceDb = "";
-        						String sourceTable = splitByDot(aliasSourceCol)[0].toLowerCase();
-        						String sourceCol = splitByDot(aliasSourceCol)[1].toLowerCase();
-        						sourceMap.put(aliasSourceCol, new String[]{sourceDb, sourceTable, sourceCol});
-        					} else {
-        						String sourceDb = splitByDot(aliasSourceCol)[0].toLowerCase();
-        						String sourceTable = splitByDot(aliasSourceCol)[1].toLowerCase();
-        						String sourceCol = splitByDot(aliasSourceCol)[2].toLowerCase();
-        						sourceMap.put(aliasSourceCol, new String[]{sourceDb, sourceTable, sourceCol});
-        					}
-        				}
-    				}
-    				
-    			}
+    		SQLSelectQuery selectQuery = insertQuery.getQuery();
+    		if (selectQuery instanceof SQLUnionQuery) {
+    			SQLSelectQueryBlock insertLeftBlock = (SQLSelectQueryBlock) ((SQLUnionQuery) selectQuery).getLeft();
+    			selectBlockToColumn(insertStmt, insertLeftBlock, aliasMap);
+    			
+    			SQLSelectQueryBlock insertRightBlock = (SQLSelectQueryBlock) ((SQLUnionQuery) selectQuery).getRight();
+    			selectBlockToColumn(insertStmt, insertRightBlock, aliasMap);
+    		} else {
+    			SQLSelectQueryBlock insertBlock = (SQLSelectQueryBlock) insertQuery.getQuery(); 
+    			selectBlockToColumn(insertStmt, insertBlock, aliasMap);
     		}
     	} else {
     		throw new Exception("not a valid Teradata insert statement!");
     	}
     }
     
-    public HashMap<String, List<String>> getDependMap() {
+    private void selectBlockToColumn(SQLInsertStatement insertStmt,
+			SQLSelectQueryBlock block, Map<String, String> aliasMap) {
+    	TeradataSelectQueryBlock insertBlock = (TeradataSelectQueryBlock) block;
+    	TeradataSchemaStatVisitor fromVisitor = new TeradataSchemaStatVisitor();
+		SQLTableSource tableSource = insertBlock.getFrom();
+		tableSource.accept(fromVisitor);
+		
+		if (insertStmt.getColumns() != null 
+				&& insertBlock.getSelectList() != null 
+				&& insertStmt.getColumns().size() == insertBlock.getSelectList().size()) {
+			for (int i=0; i<insertStmt.getColumns().size(); i++) {
+				String fullTargetCol = insertStmt.getTableName() 
+						+ "." 
+						+ insertStmt.getColumns().get(i).toString();
+								
+				// if source table is only one table
+				// no need to iterate through the visitor
+				// simply add mapping into map.
+				if (tableSource instanceof SQLExprTableSource
+						&& ((SQLExprTableSource) tableSource).getExpr() != null) {
+					addIntoMap(fullTargetCol, 
+							((SQLExprTableSource) tableSource).getExpr().toString() + 
+							"." +
+							insertBlock.getSelectList().get(i).getExpr().toString());
+				} else {
+					SQLExpr sExpr = insertBlock.getSelectList().get(i).getExpr();
+					
+					TeradataSchemaStatVisitor visitor1 = new TeradataSchemaStatVisitor();
+					
+					exprToColumn(sExpr, visitor1, fullTargetCol, aliasMap, fromVisitor);
+	
+				}				
+				setSourceMap(fullTargetCol);
+			}
+		}		
+	}
+    
+	private void setSourceMap(String fullTargetCol) {
+		List<String> fullSourceCol = dependMap.get(fullTargetCol);
+		if(fullSourceCol != null && !fullSourceCol.isEmpty()) {
+			for (String aliasSourceCol : fullSourceCol) {
+				if (aliasSourceCol.split("\\.").length == 2) {
+					String sourceDb = "";
+					String sourceTable = splitByDot(aliasSourceCol)[0].toLowerCase();
+					String sourceCol = splitByDot(aliasSourceCol)[1].toLowerCase();
+					sourceMap.put(aliasSourceCol, new String[]{sourceDb, sourceTable, sourceCol});
+				} else {
+					String sourceDb = splitByDot(aliasSourceCol)[0].toLowerCase();
+					String sourceTable = splitByDot(aliasSourceCol)[1].toLowerCase();
+					String sourceCol = splitByDot(aliasSourceCol)[2].toLowerCase();
+					sourceMap.put(aliasSourceCol, new String[]{sourceDb, sourceTable, sourceCol});
+				}
+			}
+		}
+	}
+
+	public HashMap<String, List<String>> getDependMap() {
     	return this.dependMap;
     }
     
