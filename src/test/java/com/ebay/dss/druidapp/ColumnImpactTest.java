@@ -4,6 +4,7 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.sql.Connection;
 import java.util.List;
 import java.util.Set;
 
@@ -14,26 +15,33 @@ import com.alibaba.druid.util.Utils;
 
 public class ColumnImpactTest {
 	public static void main(String[] args) throws Exception {
+		long startTime = System.currentTimeMillis();
+		
 		ColumnImpact impact = new ColumnImpact();
 		
-		String resource = "teradata-ins-2.txt";
-		String output = "mapping.csv";
+		QueryPrepare prepare = new QueryPrepare();
+		
+		final Connection connection = MetadataComplete.connMysqlDataBase("10.64.255.36","sa","sa","sa");
+		
+		String resource = "teradata-ins-3.txt";
+		String output = "result_test.csv";
 		File file = new File(output);
         BufferedWriter bw = null;
         
 		String input = Utils.readFromResource(resource);
-		input = input.replace("';'","''").replace("%;", "%").replace("+;<", "+<");
+		input = input.replace("';'","''").replace("%;", "%").replace("+;<", "+<").trim();
 		String[] queries = input.split(";");
 		System.out.println("This file has "+queries.length+" scripts to analyze.");
-		for (String ins_sql : queries) {
-		       
+		for (String query : queries) {
+		     
+			String ins_sql = prepare.getValidInsertQuery(query+";", "test.sql");
 			TeradataStatementParser parser = new TeradataStatementParser(ins_sql);
 			List<SQLStatement> statementList = parser.parseStatementList();
 			SQLStatement stmt = statementList.get(0);
 			
 //			getDependMap(stmt);
 			TeradataSchemaStatVisitor visitor = new TeradataSchemaStatVisitor();
-			impact.setDependMap(stmt, visitor);
+			impact.setDependMap(stmt, visitor, connection);
 			
 			System.out.println("dep map: " + impact.getDependMap());
 			System.out.println("source map:" + impact.getSourceMap());
@@ -75,7 +83,12 @@ public class ColumnImpactTest {
 			} catch (IOException e) {
 				System.out.println("Error on writing to file");
 			}
-		}       
+		}      
+		connection.close();
+		long endTime = System.currentTimeMillis();
+		long execTime = endTime - startTime;
+		System.out.println("there are " + impact.getMetaSchemaCount() + " meta schema counted!");
+		System.out.println("time used: " + execTime + "ms");
         System.out.println("------ end of " + new Object(){}.getClass().getEnclosingMethod().getName() + " ------");
 	}
 }
