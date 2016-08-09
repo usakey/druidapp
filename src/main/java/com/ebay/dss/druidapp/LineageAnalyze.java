@@ -37,7 +37,7 @@ public class LineageAnalyze {
 		File file = new File(output);
         BufferedWriter bw = new BufferedWriter(new FileWriter(file.getAbsoluteFile()));
 		
-		String query = "select scriptname, querytext from sa.lineage_test_tmp WHERE scriptname <>' ';";
+		String query = "select scriptname, querytext from sa.lineage_test WHERE scriptname <>' ';";
 		
 		PreparedStatement preparedStmt;
 		try {
@@ -50,8 +50,8 @@ public class LineageAnalyze {
 				String queryText = rs.getString("querytext");
 				String insQuery = prepare.getValidInsertQuery(queryText, scriptName);
 				
-				if (scriptName.equalsIgnoreCase("app_adv.dsply_dfp_eu_dim_lkp.ins.sql")
-						|| scriptName.equalsIgnoreCase("dw_clsfd.clsfd_gmt_uk_rts2_msg_w.ins.sql")) {
+				if (scriptName.equalsIgnoreCase("dw_sps.etrs3_evo_sbo_snpsht_process_w.ins.sql")
+						) {
 					continue;
 				}
 				
@@ -77,14 +77,14 @@ public class LineageAnalyze {
 //						System.out.println("source map:" + impact.getSourceMap());
 						
 						try { 
-							bw.write("file_name,"
-									+ "target_database,"
-									+ "target_table,"
-									+ "tartet_column," 
-									+ "source_database," 
-									+ "source_table," 
-									+ "source_column");
-							bw.newLine();
+//							bw.write("file_name,"
+//									+ "target_database,"
+//									+ "target_table,"
+//									+ "tartet_column," 
+//									+ "source_database," 
+//									+ "source_table," 
+//									+ "source_column");
+//							bw.newLine();
 							
 							Set<String> tgtKeys = impact.getDependMap().keySet();
 							for(String tgtKey : tgtKeys) {

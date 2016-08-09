@@ -11,19 +11,19 @@ public class QueryPrepare {
 		if (output.contains(";")) {
 			String[] queries = output.split(";");
 			for (String query : queries) {
-				if (!query.toLowerCase().contains("insert into")) {
+				if (!query.toLowerCase().contains("insert ")) {
 					output = "";
 					continue;
 				}
 				if(query.length()>=7 && ("lock".equalsIgnoreCase(query.substring(0, 4)) || "locking".equalsIgnoreCase(query.substring(0, 7)))){
-					int insertIndex = query.toLowerCase().indexOf("insert into");
+					int insertIndex = query.toLowerCase().indexOf("insert ");
 					if (insertIndex != -1) {
 						query = query.substring(insertIndex);
 						output = query.trim();
 					}
 				}
 				if(query.length()>=5 && ("using".equalsIgnoreCase(query.substring(0, 5)))){
-					int insertIndex = query.toLowerCase().indexOf("insert into");
+					int insertIndex = query.toLowerCase().indexOf("insert ");
 					if (insertIndex != -1) {
 						query = query.substring(insertIndex);
 						output = query.trim();

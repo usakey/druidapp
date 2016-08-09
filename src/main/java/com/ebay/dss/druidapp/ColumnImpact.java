@@ -70,6 +70,12 @@ public class ColumnImpact {
     			SQLSelectQueryBlock insertLeftBlock = (SQLSelectQueryBlock) ((SQLUnionQuery) selectQuery).getLeft();
     			selectBlockToColumn(insertStmt, insertLeftBlock, aliasMap, connection);
     			
+    			// in case multiple Union as selectSource
+    			while(((SQLUnionQuery) selectQuery).getRight() instanceof SQLUnionQuery) {
+    				selectQuery = ((SQLUnionQuery) selectQuery).getRight();
+    				insertLeftBlock = (SQLSelectQueryBlock) ((SQLUnionQuery) selectQuery).getLeft();
+        			selectBlockToColumn(insertStmt, insertLeftBlock, aliasMap, connection);
+    			}
     			SQLSelectQueryBlock insertRightBlock = (SQLSelectQueryBlock) ((SQLUnionQuery) selectQuery).getRight();
     			selectBlockToColumn(insertStmt, insertRightBlock, aliasMap, connection);
     		} else {
@@ -320,6 +326,12 @@ public class ColumnImpact {
 												fromVisitor.getAliasMap().get(tbName_lcase);
 				    			String newColName = col.getName();
 				    			if (!newColName.equalsIgnoreCase(colName_lcase)) {
+				    				if (newTableName.equalsIgnoreCase("unknown")) {
+				    					boolean isMetaColumn = dealWithMetaSchema(targetCols, newColName, fromVisitor, connection);
+				    					if (isMetaColumn) {
+				    						continue;
+				    					}
+				    				}
 				    				toRealColumn(expr, fromVisitor, targetCols, newTableName, newColName, aliMap, connection);	
 				    			} else {
 				    				concatColumn(expr, fromVisitor, targetCols, newTableName, newColName, aliMap, connection);
@@ -334,13 +346,30 @@ public class ColumnImpact {
 				}				
 			} else {
 				// otherwise recursively get real column
-				toRealColumn(expr, fromVisitor, targetCols, 
-						fromVisitor.getAliasMap().get(colName_lcase).contains(".") ? 
-								fromVisitor.getAliasMap().get(colName_lcase).split("\\.")[0] : tbName_lcase,
-						fromVisitor.getAliasMap().get(colName_lcase).contains(".") ?
-								fromVisitor.getAliasMap().get(colName_lcase).split("\\.")[1]: fromVisitor.getAliasMap().get(colName_lcase),
-						aliMap,
-						connection);
+				if (fromVisitor.getAliasMap().get(colName_lcase).contains(".")) {
+					String newTable = fromVisitor.getAliasMap().get(colName_lcase).split("\\.")[0].toLowerCase();
+					String newColumn = fromVisitor.getAliasMap().get(colName_lcase).split("\\.")[1].toLowerCase();
+					if (!newColumn.equalsIgnoreCase(colName_lcase)) {
+						toRealColumn(expr, fromVisitor, targetCols, newTable, newColumn, aliMap, connection);
+					} else {
+						concatColumn(expr, fromVisitor, targetCols, newTable, newColumn, aliMap, connection);
+					}
+					
+				} else if (!fromVisitor.getAliasMap().get(colName_lcase).equalsIgnoreCase(colName_lcase)){
+					if (tbName_lcase.equalsIgnoreCase("unknown")) {
+    					boolean isMetaColumn = dealWithMetaSchema(targetCols, fromVisitor.getAliasMap().get(colName_lcase), fromVisitor, connection);
+    					if (isMetaColumn) {
+    						return;
+    					}
+    				}
+					toRealColumn(expr, fromVisitor, targetCols, 
+							tbName_lcase,
+					        fromVisitor.getAliasMap().get(colName_lcase),
+					        aliMap,
+					        connection);
+				} else {
+					concatColumn(expr, fromVisitor, targetCols, tbName_lcase, colName_lcase, aliMap, connection); 	
+				}
 			}
 		// case 2: 
 		} else {
@@ -357,16 +386,22 @@ public class ColumnImpact {
 			// 2. lastly, have to iterate through all columns of fromVisitor tree
 			for (Column col : fromVisitor.getColumns()) {
 				if (colName.equalsIgnoreCase(col.getName())) {
-					addIntoMap(targetCols, col.toString());
-					tbName = col.getTable();			}
+					tbName = col.getTable();			
+					if (tbName.equalsIgnoreCase("unknown")) {
+						dealWithMetaSchema(targetCols, colName, fromVisitor, connection);
+					} else {
+						addIntoMap(targetCols, col.toString());
+
+					}	
+				}
 			}
 		} 
-        if (tbName.equalsIgnoreCase("unknown")) {
-			dealWithMetaSchema(targetCols, colName, fromVisitor, connection);
-		}
+//        if (tbName.equalsIgnoreCase("unknown")) {
+//			dealWithMetaSchema(targetCols, colName, fromVisitor, connection);
+//		}
     }
     
-    private void dealWithMetaSchema(String fullTargetCol, String colName, SchemaStatVisitor fromVisitor, Connection connection) throws SQLException {
+    private boolean dealWithMetaSchema(String fullTargetCol, String colName, SchemaStatVisitor fromVisitor, Connection connection) throws SQLException {
 		String platform = "mozart";
 		
 		Set<Name> tables = fromVisitor.getTables().keySet();
@@ -377,12 +412,13 @@ public class ColumnImpact {
 //				ArrayList<String> metaSchema = mc.getMetaSchema(dbName, tbName, connection, platform);
 				ArrayList<String> metaSchema = getMetaColumnList(dbName, tbName, connection, platform);
 				// 
-				if (metaSchema.contains(colName)) {
+				if (metaSchema.contains(colName.toLowerCase()) ||
+						metaSchema.contains(colName.toUpperCase())) {
 					addIntoMap(fullTargetCol,
 							dbName + "." + tbName + "." + colName);
 					++COUNT;
 					System.out.println("$$$$$ " + dbName + "." + tbName + "." + colName);
-					break;
+					return true;
 				} else {
 					continue;
 				}
@@ -393,6 +429,7 @@ public class ColumnImpact {
 				logger.error("*********************");
 			}
 		}
+		return false;
 	}
     
     private ArrayList<String> getMetaColumnList(String dbName, String tbName, Connection connection, String platform) throws SQLException {
@@ -404,12 +441,12 @@ public class ColumnImpact {
     	List<String> tempList = null;
 		if (!dependMap.containsKey(key)) {
 			tempList = new ArrayList<String>();
-		    tempList.add(value);
+		    tempList.add(value.toLowerCase());
 			dependMap.put(key, tempList);
 		} else {
 			tempList = dependMap.get(key);
-			if (!tempList.contains(value)) {
-			    tempList.add(value);
+			if (!tempList.contains(value.toLowerCase())) {
+			    tempList.add(value.toLowerCase());
 			    dependMap.put(key, tempList);
 			}
 		}
