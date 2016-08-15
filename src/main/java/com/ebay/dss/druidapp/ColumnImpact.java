@@ -21,14 +21,17 @@ import com.alibaba.druid.sql.ast.expr.SQLBinaryOpExpr;
 import com.alibaba.druid.sql.ast.expr.SQLCaseExpr;
 import com.alibaba.druid.sql.ast.expr.SQLCastExpr;
 import com.alibaba.druid.sql.ast.expr.SQLIdentifierExpr;
+import com.alibaba.druid.sql.ast.expr.SQLInSubQueryExpr;
 import com.alibaba.druid.sql.ast.expr.SQLMethodInvokeExpr;
 import com.alibaba.druid.sql.ast.expr.SQLPropertyExpr;
 import com.alibaba.druid.sql.ast.statement.SQLExprTableSource;
 import com.alibaba.druid.sql.ast.statement.SQLInsertStatement;
+import com.alibaba.druid.sql.ast.statement.SQLJoinTableSource;
 import com.alibaba.druid.sql.ast.statement.SQLSelect;
 import com.alibaba.druid.sql.ast.statement.SQLSelectItem;
 import com.alibaba.druid.sql.ast.statement.SQLSelectQuery;
 import com.alibaba.druid.sql.ast.statement.SQLSelectQueryBlock;
+import com.alibaba.druid.sql.ast.statement.SQLSelectStatement;
 import com.alibaba.druid.sql.ast.statement.SQLTableSource;
 import com.alibaba.druid.sql.ast.statement.SQLUnionQuery;
 import com.alibaba.druid.sql.dialect.teradata.ast.stmt.TeradataInsertStatement;
@@ -55,9 +58,13 @@ public class ColumnImpact {
     	Map<String, String> aliasMap = new HashMap<String, String>();
     	aliasMap = visitor.getAliasMap();
     	
+    	List<String> fullTargetColumns = new ArrayList<String>();
+    	
     	if (stmt instanceof TeradataInsertStatement) {
     		TeradataInsertStatement insertStmt = (TeradataInsertStatement) stmt;
     		SQLSelect insertQuery = insertStmt.getQuery();
+    		
+    		
     		
     		// if insert into ... values()...
     		// do nothing
@@ -68,32 +75,62 @@ public class ColumnImpact {
     		SQLSelectQuery selectQuery = insertQuery.getQuery();
     		if (selectQuery instanceof SQLUnionQuery) {
     			SQLSelectQueryBlock insertLeftBlock = (SQLSelectQueryBlock) ((SQLUnionQuery) selectQuery).getLeft();
-    			selectBlockToColumn(insertStmt, insertLeftBlock, aliasMap, connection);
+    			fullTargetColumns = getFullTargetColumnFromInsert(insertStmt, insertLeftBlock, connection);
+    			
+    			selectBlockToColumn(fullTargetColumns, insertLeftBlock, aliasMap, connection);
     			
     			// in case multiple Union as selectSource
     			while(((SQLUnionQuery) selectQuery).getRight() instanceof SQLUnionQuery) {
     				selectQuery = ((SQLUnionQuery) selectQuery).getRight();
     				insertLeftBlock = (SQLSelectQueryBlock) ((SQLUnionQuery) selectQuery).getLeft();
-        			selectBlockToColumn(insertStmt, insertLeftBlock, aliasMap, connection);
+    				fullTargetColumns = getFullTargetColumnFromInsert(insertStmt, insertLeftBlock, connection);
+        			
+    				selectBlockToColumn(fullTargetColumns, insertLeftBlock, aliasMap, connection);
     			}
     			SQLSelectQueryBlock insertRightBlock = (SQLSelectQueryBlock) ((SQLUnionQuery) selectQuery).getRight();
-    			selectBlockToColumn(insertStmt, insertRightBlock, aliasMap, connection);
+    			fullTargetColumns = getFullTargetColumnFromInsert(insertStmt, insertRightBlock, connection);
+
+    			selectBlockToColumn(fullTargetColumns, insertRightBlock, aliasMap, connection);
     		} else {
-    			SQLSelectQueryBlock insertBlock = (SQLSelectQueryBlock) insertQuery.getQuery(); 
-    			selectBlockToColumn(insertStmt, insertBlock, aliasMap, connection);
+    			SQLSelectQueryBlock insertBlock = (SQLSelectQueryBlock) insertQuery.getQuery();
+    			fullTargetColumns = getFullTargetColumnFromInsert(insertStmt, insertBlock, connection);
+
+    			selectBlockToColumn(fullTargetColumns, insertBlock, aliasMap, connection);
+    			
+//    			whereBlockToColumn(insertBlock, aliasMap, connection);
     		}
+    	} else if (stmt instanceof SQLSelectStatement) {
+    		// TODO
+//    		List<String> fullTargetColumns = new ArrayList<String>();
+    		
+    		SQLSelectQueryBlock selectBlock = (SQLSelectQueryBlock) ((SQLSelectStatement) stmt).getSelect().getQuery();
+    		List<SQLSelectItem> selectList = selectBlock.getSelectList();
+    		for (SQLSelectItem item : selectList) {
+    			if (! (item.getExpr() instanceof SQLIdentifierExpr)) {
+    				if (item.getAlias() != null) {
+    					fullTargetColumns.add("benson_column_usage." + item.getAlias());	
+    				} else {
+    					
+    				}
+    				
+    			} else {
+        			fullTargetColumns.add("benson_column_usage." + item.toString());	
+    			} 
+    			
+    		}
+    		for (String targetColumn : fullTargetColumns) {
+    			System.out.println(targetColumn);
+    			selectBlockToColumn(fullTargetColumns, selectBlock, aliasMap, connection);
+    		}
+    		
+//    		fullTargetColumns = 
     	} else {
     		logger.error(stmt.toString() + "is not a valid TD insert statement!");
 //    		throw new Exception("not a valid Teradata insert statement!");
     	}
     }
     
-    public void resetMap() {
-    	this.dependMap.clear();
-    	this.sourceMap.clear();
-    }
-    
-    private void selectBlockToColumn(SQLInsertStatement insertStmt,
+    private void selectBlockToColumn(List<String> fullTargetCol,
 			SQLSelectQueryBlock block, Map<String, String> aliasMap, Connection connection) throws SQLException {
     	TeradataSelectQueryBlock iBlock = (TeradataSelectQueryBlock) block;
     	TeradataSchemaStatVisitor fromVisitor = new TeradataSchemaStatVisitor();
@@ -102,73 +139,172 @@ public class ColumnImpact {
 		
 		SQLSelectQueryBlock insertBlock = convertFromAllColumnExpr(iBlock, tableSource, connection);
 		
+		// deal with select list
 		if (insertBlock.getSelectList() != null) {
-			// if insert without columns specified
-			// retrieve columns from meta schema
-			if (insertStmt.getColumns().isEmpty()) {
-			    String table = insertStmt.getTableName().toString();
-			    if (table.split("\\.").length == 2) { 
-			    	String dbName = splitByDot(table)[0].toLowerCase().trim();
-					String tbName = splitByDot(table)[1].toLowerCase().trim();
-					ArrayList<String> metaSchema = getMetaColumnList(dbName, tbName, connection, "mozart");
+			selectToColumn(fullTargetCol, insertBlock, aliasMap, connection, tableSource);
+		}
+	}
+    
+    private void selectToColumn(List<String> fullTargetColList, SQLSelectQueryBlock insertBlock,
+			Map<String, String> aliasMap, Connection connection, SQLTableSource tableSource) throws SQLException {
+    	TeradataSchemaStatVisitor fromVisitor = new TeradataSchemaStatVisitor();
+    	tableSource.accept(fromVisitor);
+    	
+    	for (int i=0; i<fullTargetColList.size(); i++) {
+    		String fullTargetCol = fullTargetColList.get(i);
+			// if source table is only one table
+			// no need to iterate through the visitor
+			// simply add mapping into map.
+			if (tableSource instanceof SQLExprTableSource
+					&& ((SQLExprTableSource) tableSource).getExpr() != null
+					&& insertBlock.getSelectList().get(i).getExpr() instanceof SQLIdentifierExpr) {
+				addIntoMap(fullTargetCol, 
+						((SQLExprTableSource) tableSource).getExpr().toString() + 
+						"." +
+						insertBlock.getSelectList().get(i).getExpr().toString() + 
+						"#select");
+			} else {
+				SQLExpr sExpr = insertBlock.getSelectList().get(i).getExpr();
+				TeradataSchemaStatVisitor visitor1 = new TeradataSchemaStatVisitor();
 					
-					for (int i=0; i<metaSchema.size(); i++) {
-						String fullTargetCol = dbName + "." + tbName + "." + metaSchema.get(i);
-						// if source table is only one table
-						// no need to iterate through the visitor
-						// simply add mapping into map.
-						if (tableSource instanceof SQLExprTableSource
-								&& ((SQLExprTableSource) tableSource).getExpr() != null
-								&& insertBlock.getSelectList().get(i).getExpr() instanceof SQLIdentifierExpr) {
-							addIntoMap(fullTargetCol, 
-									((SQLExprTableSource) tableSource).getExpr().toString() + 
-									"." +
-									insertBlock.getSelectList().get(i).getExpr().toString());
-						} else {
-							SQLExpr sExpr = insertBlock.getSelectList().get(i).getExpr();
-							TeradataSchemaStatVisitor visitor1 = new TeradataSchemaStatVisitor();
-								
-							exprToColumn(sExpr, visitor1, fullTargetCol, aliasMap, fromVisitor, connection);
-						}			
-						
-						setSourceMap(fullTargetCol);
-					}
-			    } else {
-			    	logger.error("no db name or table name!");
-			    }
-			  // if insert with columns
-			  // get columns from insert statement.
-			} else if (insertStmt.getColumns().size() == insertBlock.getSelectList().size()){
-				for (int i=0; i<insertStmt.getColumns().size(); i++) {
-					String fullTargetCol = insertStmt.getTableName() 
-							+ "." 
-							+ insertStmt.getColumns().get(i).toString();
-									
-					// if source table is only one table
-					// no need to iterate through the visitor
-					// simply add mapping into map.
+				exprToColumn(sExpr, visitor1, fullTargetCol, aliasMap, fromVisitor, connection, "select");
+			}	
+			
+			// only in case of dependMap have insertion
+			// do we check the join and where condition.
+			List<String> fullSourceCol = dependMap.get(fullTargetCol);
+			if(fullSourceCol != null && !fullSourceCol.isEmpty()) {
+				// deal with join clauses
+				if (insertBlock.getFrom() instanceof SQLJoinTableSource) {
+//					SQLJoinTableSource joinSource = (SQLJoinTableSource) insertBlock.getFrom();
+//					TeradataSchemaStatVisitor joinVisitor = new TeradataSchemaStatVisitor();
+//					joinSource.accept(joinVisitor);
+					SQLExpr conExpr = ((SQLJoinTableSource) insertBlock.getFrom()).getCondition();
+					
+					
+					List<SQLExpr> exprList = new ArrayList<SQLExpr>(); 
+					getAllLeafNodes(conExpr, exprList);
+					System.out.println(exprList);
+					joinToColumn(exprList, fullTargetCol, aliasMap, fromVisitor, connection);
+				}
+				// deal with where clauses
+				if (insertBlock.getWhere() != null) {
+					System.out.println("has where!");
+					TeradataSchemaStatVisitor whereVisitor = new TeradataSchemaStatVisitor();
+					insertBlock.getWhere().accept(whereVisitor);
+					SQLExpr sExpr = insertBlock.getWhere();
+					exprToColumn(sExpr, whereVisitor, fullTargetCol, aliasMap, fromVisitor, connection, "where");
+				}
+			}
+			
+			setSourceMap(fullTargetCol);
+		
+    	}	
+	}
+    
+    private List<String> getFullTargetColumnFromInsert(SQLInsertStatement insertStmt, SQLSelectQueryBlock insertBlock, Connection connection) throws SQLException {
+    	List<String> fullTargetColList = new ArrayList<String>();
+    	
+    	// if insert without columns specified
+    	// retrieve columns from meta schema
+    	if (insertStmt.getColumns().isEmpty()) {
+		    String table = insertStmt.getTableName().toString();
+		    if (table.split("\\.").length == 2) { 
+		    	String dbName = splitByDot(table)[0].toLowerCase().trim();
+				String tbName = splitByDot(table)[1].toLowerCase().trim();
+				ArrayList<String> metaSchema = getMetaColumnList(dbName, tbName, connection, "mozart");
+				
+				for (int i=0; i<metaSchema.size(); i++) {
+					String fullTargetCol = dbName + "." + tbName + "." + metaSchema.get(i);
+					fullTargetColList.add(fullTargetCol);
+				}
+		    } else {
+		    	logger.error("no db name or table name!");
+		    } 
+		 // if insert with columns
+		 // get columns from insert statement.
+    	} else if (insertStmt.getColumns().size() == insertBlock.getSelectList().size()) {
+			for (int i=0; i<insertStmt.getColumns().size(); i++) {
+				String fullTargetCol = insertStmt.getTableName() 
+						+ "." 
+						+ insertStmt.getColumns().get(i).toString();
+				fullTargetColList.add(fullTargetCol);
+			}
+	    }
+    	
+    	return fullTargetColList;
+    }
+    
+    private void joinToColumn(List<SQLExpr> exprList, String fullTargetCol, Map<String, String> aliasMap, SchemaStatVisitor fromVisitor, Connection connection) throws SQLException {
+		for(SQLExpr expr : exprList) {
+			if (expr instanceof SQLBinaryOpExpr) {
+				TeradataSchemaStatVisitor joinVisitor = new TeradataSchemaStatVisitor();
+				expr.accept(joinVisitor);
+				exprToColumn(expr, joinVisitor, fullTargetCol, aliasMap, fromVisitor, connection, "join");
+			} 
+			else if (expr instanceof SQLInSubQueryExpr) {
+				TeradataSchemaStatVisitor joinVisitor = new TeradataSchemaStatVisitor();
+				expr.accept(joinVisitor);
+				SQLExpr exp = ((SQLInSubQueryExpr) expr).getExpr();
+				exprToColumn(exp, joinVisitor, fullTargetCol, aliasMap, fromVisitor, connection, "join");
+				
+				// subquery with select
+				SQLSelectQueryBlock queryBlock = (SQLSelectQueryBlock)((SQLInSubQueryExpr) expr).getSubQuery().getQuery();  
+				
+				TeradataSchemaStatVisitor innerFromVisitor = new TeradataSchemaStatVisitor();
+				SQLTableSource tableSource = queryBlock.getFrom();
+				tableSource.accept(innerFromVisitor);
+				SQLSelectQueryBlock insertBlock = convertFromAllColumnExpr(queryBlock, tableSource, connection);
+				
+				for(int i=0; i<insertBlock.getSelectList().size(); i++) {
 					if (tableSource instanceof SQLExprTableSource
 							&& ((SQLExprTableSource) tableSource).getExpr() != null
 							&& insertBlock.getSelectList().get(i).getExpr() instanceof SQLIdentifierExpr) {
 						addIntoMap(fullTargetCol, 
 								((SQLExprTableSource) tableSource).getExpr().toString() + 
 								"." +
-								insertBlock.getSelectList().get(i).getExpr().toString());
+								insertBlock.getSelectList().get(i).getExpr().toString() + 
+								"#join");
 					} else {
 						SQLExpr sExpr = insertBlock.getSelectList().get(i).getExpr();
 						TeradataSchemaStatVisitor visitor1 = new TeradataSchemaStatVisitor();
-						
-						exprToColumn(sExpr, visitor1, fullTargetCol, aliasMap, fromVisitor, connection);
-					}			
-					
-					setSourceMap(fullTargetCol);
+							
+						exprToColumn(sExpr, visitor1, fullTargetCol, aliasMap, innerFromVisitor, connection, "join");
+					}
+					if (insertBlock.getWhere() != null) {
+//						System.out.println("has where!");
+						TeradataSchemaStatVisitor whereVisitor = new TeradataSchemaStatVisitor();
+						insertBlock.getWhere().accept(whereVisitor);
+						SQLExpr sExpr = insertBlock.getWhere();
+						exprToColumn(sExpr, whereVisitor, fullTargetCol, aliasMap, innerFromVisitor, connection, "where");
+					}
 				}
-			} else {
-				logger.error("insert and select not match!");
 			}
-			}
-					
+		}
 	}
+
+	private void getAllLeafNodes(SQLExpr expr, List<SQLExpr> exprList) {
+    	if (expr == null)
+    		return;    	
+    	
+    	if (expr instanceof SQLBinaryOpExpr) {
+    		if ((((SQLBinaryOpExpr)expr).getLeft() instanceof SQLPropertyExpr) || 
+    				(((SQLBinaryOpExpr)expr).getRight() instanceof SQLPropertyExpr)) {
+    			exprList.add(expr);
+    		} else {
+	    		getAllLeafNodes(((SQLBinaryOpExpr)expr).getLeft(), exprList);
+	    		
+	    		getAllLeafNodes(((SQLBinaryOpExpr)expr).getRight(), exprList);
+    		}
+    	} else if (! (expr instanceof SQLPropertyExpr)){
+    		exprList.add(expr);
+    	}
+    }
+
+	public void resetMap() {
+    	this.dependMap.clear();
+    	this.sourceMap.clear();
+    }
     
 	private SQLSelectQueryBlock convertFromAllColumnExpr(SQLSelectQueryBlock insertBlock, SQLTableSource tableSource, Connection connection) throws SQLException {
 		SQLSelectQueryBlock changedBlock = new SQLSelectQueryBlock();
@@ -199,13 +335,15 @@ public class ColumnImpact {
 				if (aliasSourceCol.split("\\.").length == 2) {
 					String sourceDb = "";
 					String sourceTable = splitByDot(aliasSourceCol)[0].toLowerCase();
-					String sourceCol = splitByDot(aliasSourceCol)[1].toLowerCase();
-					sourceMap.put(aliasSourceCol, new String[]{sourceDb, sourceTable, sourceCol});
+					String sourceCol = splitByDot(aliasSourceCol)[1].toLowerCase().split("\\#")[0];
+					String columnType = splitByDot(aliasSourceCol)[1].toLowerCase().split("\\#")[1];
+					sourceMap.put(aliasSourceCol, new String[]{sourceDb, sourceTable, sourceCol, columnType});
 				} else {
 					String sourceDb = splitByDot(aliasSourceCol)[0].toLowerCase();
 					String sourceTable = splitByDot(aliasSourceCol)[1].toLowerCase();
-					String sourceCol = splitByDot(aliasSourceCol)[2].toLowerCase();
-					sourceMap.put(aliasSourceCol, new String[]{sourceDb, sourceTable, sourceCol});
+					String sourceCol = splitByDot(aliasSourceCol)[2].toLowerCase().split("\\#")[0];
+					String columnType = splitByDot(aliasSourceCol)[2].toLowerCase().split("\\#")[1];
+					sourceMap.put(aliasSourceCol, new String[]{sourceDb, sourceTable, sourceCol, columnType});
 				}
 			}
 		}
@@ -230,7 +368,7 @@ public class ColumnImpact {
 		return res;
 	}
     
-    private void exprToColumn(SQLExpr expr, SchemaStatVisitor visitor, String targetCols, Map<String, String> aliMap, SchemaStatVisitor fromVisitor, Connection connection) throws SQLException {
+    private void exprToColumn(SQLExpr expr, SchemaStatVisitor visitor, String targetCols, Map<String, String> aliMap, SchemaStatVisitor fromVisitor, Connection connection, String columnType) throws SQLException {
     	if (expr instanceof SQLPropertyExpr
     			|| expr instanceof SQLIdentifierExpr) {
     		String colOwner;
@@ -244,7 +382,7 @@ public class ColumnImpact {
         		colName = ((SQLPropertyExpr) expr).getName().toString();
     		}
     		
-			toRealColumn(expr, fromVisitor, targetCols, colOwner, colName.toLowerCase(), aliMap, connection);    		
+			toRealColumn(expr, fromVisitor, targetCols, colOwner, colName.toLowerCase(), aliMap, connection, columnType);    		
     		return;
     	}
     	
@@ -258,7 +396,7 @@ public class ColumnImpact {
         			String tableName = column.getTable();
         			String colName = column.getName();
 
-        			toRealColumn(expr, fromVisitor, targetCols, tableName, colName, aliMap, connection);
+        			toRealColumn(expr, fromVisitor, targetCols, tableName, colName, aliMap, connection, columnType);
         		}
     		}
     	} else if (expr instanceof SQLCaseExpr) {
@@ -275,7 +413,7 @@ public class ColumnImpact {
     			String tableName = column.getTable();
     			String colName = column.getName();
     			
-    			toRealColumn(expr, fromVisitor, targetCols, tableName, colName, aliMap, connection);
+    			toRealColumn(expr, fromVisitor, targetCols, tableName, colName, aliMap, connection, columnType);
     		}
     		return;
     	} else if (expr instanceof SQLCastExpr) {
@@ -285,7 +423,7 @@ public class ColumnImpact {
     			String tableName = column.getTable();
     			String colName = column.getName();
     			
-    			toRealColumn(expr, fromVisitor, targetCols, tableName, colName, aliMap, connection);
+    			toRealColumn(expr, fromVisitor, targetCols, tableName, colName, aliMap, connection, columnType);
     		}
     	} else if (expr instanceof SQLBinaryOpExpr
     			|| expr instanceof SQLAggregateExpr) {
@@ -295,15 +433,17 @@ public class ColumnImpact {
     			String tableName = column.getTable();
     			String colName = column.getName();
     			
-    			toRealColumn(expr, fromVisitor, targetCols, tableName, colName, aliMap, connection);
+    			toRealColumn(expr, fromVisitor, targetCols, tableName, colName, aliMap, connection, columnType);
     		}
+    	} else if (expr instanceof SQLJoinTableSource) {
+    		System.out.println("join!!");
     	}
     	// other cases to be added here.
 
     	return;
     }
     
-    private void toRealColumn(SQLExpr expr, SchemaStatVisitor fromVisitor, String targetCols, String tbName, String colName, Map<String, String> aliMap, Connection connection) throws SQLException {
+    private void toRealColumn(SQLExpr expr, SchemaStatVisitor fromVisitor, String targetCols, String tbName, String colName, Map<String, String> aliMap, Connection connection, String columnType) throws SQLException {
     	String tbName_lcase = tbName.toLowerCase();
     	String colName_lcase = colName.toLowerCase();
     	// case 1: if colName in fromVisitor#aliasMap
@@ -327,18 +467,18 @@ public class ColumnImpact {
 				    			String newColName = col.getName();
 				    			if (!newColName.equalsIgnoreCase(colName_lcase)) {
 				    				if (newTableName.equalsIgnoreCase("unknown")) {
-				    					boolean isMetaColumn = dealWithMetaSchema(targetCols, newColName, fromVisitor, connection);
+				    					boolean isMetaColumn = dealWithMetaSchema(targetCols, newColName, fromVisitor, connection, columnType);
 				    					if (isMetaColumn) {
 				    						continue;
 				    					}
 				    				}
-				    				toRealColumn(expr, fromVisitor, targetCols, newTableName, newColName, aliMap, connection);	
+				    				toRealColumn(expr, fromVisitor, targetCols, newTableName, newColName, aliMap, connection, columnType);	
 				    			} else {
-				    				concatColumn(expr, fromVisitor, targetCols, newTableName, newColName, aliMap, connection);
+				    				concatColumn(expr, fromVisitor, targetCols, newTableName, newColName, aliMap, connection, columnType);
 				    			}
 							}
 						} else {
-							concatColumn(expr, fromVisitor, targetCols, tbName_lcase, colName_lcase, aliMap, connection);
+							concatColumn(expr, fromVisitor, targetCols, tbName_lcase, colName_lcase, aliMap, connection, columnType);
 						}
 						
 						break;
@@ -350,14 +490,14 @@ public class ColumnImpact {
 					String newTable = fromVisitor.getAliasMap().get(colName_lcase).split("\\.")[0].toLowerCase();
 					String newColumn = fromVisitor.getAliasMap().get(colName_lcase).split("\\.")[1].toLowerCase();
 					if (!newColumn.equalsIgnoreCase(colName_lcase)) {
-						toRealColumn(expr, fromVisitor, targetCols, newTable, newColumn, aliMap, connection);
+						toRealColumn(expr, fromVisitor, targetCols, newTable, newColumn, aliMap, connection, columnType);
 					} else {
-						concatColumn(expr, fromVisitor, targetCols, newTable, newColumn, aliMap, connection);
+						concatColumn(expr, fromVisitor, targetCols, newTable, newColumn, aliMap, connection, columnType);
 					}
 					
 				} else if (!fromVisitor.getAliasMap().get(colName_lcase).equalsIgnoreCase(colName_lcase)){
 					if (tbName_lcase.equalsIgnoreCase("unknown")) {
-    					boolean isMetaColumn = dealWithMetaSchema(targetCols, fromVisitor.getAliasMap().get(colName_lcase), fromVisitor, connection);
+    					boolean isMetaColumn = dealWithMetaSchema(targetCols, fromVisitor.getAliasMap().get(colName_lcase), fromVisitor, connection, columnType);
     					if (isMetaColumn) {
     						return;
     					}
@@ -366,42 +506,49 @@ public class ColumnImpact {
 							tbName_lcase,
 					        fromVisitor.getAliasMap().get(colName_lcase),
 					        aliMap,
-					        connection);
+					        connection,
+					        columnType);
 				} else {
-					concatColumn(expr, fromVisitor, targetCols, tbName_lcase, colName_lcase, aliMap, connection); 	
+					concatColumn(expr, fromVisitor, targetCols, tbName_lcase, colName_lcase, aliMap, connection, columnType); 	
 				}
 			}
 		// case 2: 
 		} else {
-			concatColumn(expr, fromVisitor, targetCols, tbName_lcase, colName_lcase, aliMap, connection);
+			concatColumn(expr, fromVisitor, targetCols, tbName_lcase, colName_lcase, aliMap, connection, columnType);
 		}
     }
     
-    private void concatColumn(SQLExpr expr, SchemaStatVisitor fromVisitor, String targetCols, String tbName, String colName, Map<String, String> aliMap, Connection connection) throws SQLException {
-		Set<String> aliKeys = aliMap.keySet();
+    private void concatColumn(SQLExpr expr, SchemaStatVisitor fromVisitor, String targetCols, String tbName, String colName, Map<String, String> aliMap, Connection connection, String columnType) throws SQLException {
+		boolean flag = false;
+    	
+    	Set<String> aliKeys = aliMap.keySet();
 		if (aliKeys.contains(tbName)) {
 			// 1. set full db.table to expr
-			addIntoMap(targetCols, aliMap.get(tbName)+"."+colName);
+			addIntoMap(targetCols, aliMap.get(tbName)+"."+colName+"#"+columnType);
 		} else {
 			// 2. lastly, have to iterate through all columns of fromVisitor tree
+			if (fromVisitor.getColumns().size() == 0) {
+				dealWithMetaSchema(targetCols, colName, fromVisitor, connection, columnType);
+			}
 			for (Column col : fromVisitor.getColumns()) {
 				if (colName.equalsIgnoreCase(col.getName())) {
+					flag = true;
 					tbName = col.getTable();			
 					if (tbName.equalsIgnoreCase("unknown")) {
-						dealWithMetaSchema(targetCols, colName, fromVisitor, connection);
+						dealWithMetaSchema(targetCols, colName, fromVisitor, connection, columnType);
 					} else {
-						addIntoMap(targetCols, col.toString());
+						addIntoMap(targetCols, col.toString() + "#" + columnType);
 
 					}	
 				}
 			}
 		} 
-//        if (tbName.equalsIgnoreCase("unknown")) {
-//			dealWithMetaSchema(targetCols, colName, fromVisitor, connection);
-//		}
+        if (!flag) {
+        	dealWithMetaSchema(targetCols, colName, fromVisitor, connection, columnType);
+		}
     }
     
-    private boolean dealWithMetaSchema(String fullTargetCol, String colName, SchemaStatVisitor fromVisitor, Connection connection) throws SQLException {
+    private boolean dealWithMetaSchema(String fullTargetCol, String colName, SchemaStatVisitor fromVisitor, Connection connection, String columnType) throws SQLException {
 		String platform = "mozart";
 		
 		Set<Name> tables = fromVisitor.getTables().keySet();
@@ -415,9 +562,9 @@ public class ColumnImpact {
 				if (metaSchema.contains(colName.toLowerCase()) ||
 						metaSchema.contains(colName.toUpperCase())) {
 					addIntoMap(fullTargetCol,
-							dbName + "." + tbName + "." + colName);
+							dbName + "." + tbName + "." + colName + "#" + columnType);
 					++COUNT;
-					System.out.println("$$$$$ " + dbName + "." + tbName + "." + colName);
+					System.out.println("$$$$$ " + dbName + "." + tbName + "." + colName + "#" + columnType);
 					return true;
 				} else {
 					continue;
