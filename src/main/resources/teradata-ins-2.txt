@@ -1,17 +1,88 @@
-INSERT INTO APP_TRUST_W.JW_TEMP1_W
-(
- USER_ID                       
-,INR                           
-,BBE                           
-)
-SEL five.user_id, SUM(INR_flag) AS INR, SUM(defect_flag) AS BBE 
-FROM (SEL s.user_id, s.date_rpt,  s.week_id,   s.month_id,  b.trans_dt,  b.INR_flag, b.defect_flag           
-   FROM PRS_RESTRICTED_V.ebay_trans_rltd_event b
-   INNER JOIN  other_susp_2014 s
-   ON b.slr_id=s.user_id AND b.trans_dt<=s.date_rpt AND auct_type_code NOT IN (10,12,15)   AND BYR_ATO_YN_IND  =  0 AND rprtd_wacko_yn_ind = 'N' AND CORE_CATEG_IND = 1          
-   where b.trans_dt > 1130101
-  --QUALIFY ROW_NUMBER() OVER( PARTITION BY user_id ORDER BY b.trans_dt ASC) <=5
-  ) five   
-GROUP BY 1
-HAVING INR>0 OR BBE>0 
+insert into app_buyer_t.vac_sw_live_lstg_w
+/*  (
+    LIVE_LSTG_CNT,     
+ SPS_PRGRM_ID,      
+ ASP_SGMNT_CD,      
+ MOBILE_APP_YN_IND, 
+ GSP_YN_IND,        
+ FNF_YN_IND,        
+ ITEM_CONDITION ,   
+ LSTG_FORMAT_NAME,  
+ LSTG_SITE_ID     , 
+ LEAF_CATEG_ID     ,
+ BYR_CNTRY_ID      ,
+ SLR_CNTRY_ID      ,
+ SLR_ID            ,
+ GLBL_RPRT_GEO_CD  ,
+ CAL_DT
+    )
+    */
+SELECT
+        LL.cal_dt
+       ,GEO.GLBL_RPRT_GEO_CD
+       ,LL.SLR_ID
+       ,LL.SLR_CNTRY_ID
+       ,CAST(NULL AS  DECIMAL(4,0)) AS BYR_CNTRY_ID
+       ,LL.LEAF_CATEG_ID
+       ,LL.LSTG_SITE_ID
+       ,CASE WHEN BIN_LSTG_YN_ID=1 AND LSTG_TYPE_CODE=1 THEN 'ABIN'
+             WHEN LSTG_TYPE_CODE=1 THEN 'Auction'
+             WHEN LSTG_TYPE_CODE IN (7,9) AND GTC_UP_FLAG =1 THEN 'FP-GTC'
+             WHEN LSTG_TYPE_CODE IN (7,9) AND GTC_UP_FLAG <>1 THEN 'FP-non GTC'
+         ELSE 'Others'  END LSTG_FORMAT_NAME
+       ,CASE WHEN ITEM_CNDTN_CD IN (1,1000,1750,1500) THEN 'New'
+             WHEN ITEM_CNDTN_CD IN (2,2000,2500) THEN 'Refurbished'
+             WHEN ITEM_CNDTN_CD IN (3,3000,6000,4000,5000,7000) THEN 'Used'
+          ELSE 'Not Specified' END AS ITEM_CONDITION
+       ,FNF_YN_IND
+       ,GSP_YN_IND
+       ,MOBILE_APP_YN_IND
+       ,-99 as ASP_SGMNT_CD
+       ,CASE WHEN cntry.REV_ROLLUP_ID = 33 THEN 2
+             WHEN cntry.REV_ROLLUP_ID = 32 THEN 3
+             WHEN cntry.REV_ROLLUP_ID = 8  THEN 4
+             ELSE 1
+         END  as SPS_PRGRM_ID
+       ,SUM(CASE WHEN FRMT.INVNTRY_FRMT_CD IN(2,3) THEN LL.LIVE_LSTG_CNT ELSE NULL END)  LIVE_LSTG_CNT
+    FROM
+        app_buyer_t.VAC_LIVE_LSTG_W_data  LL,
+        access_views.dw_countries  cntry,
+        APP_HARMONY_T.GLBL_RPRT_GEO_DIM GEO,
+        APP_HARMONY_T.SSA_LSTG_FRMT_DETAIL_MAP FRMT
+    WHERE
+            LL.SLR_CNTRY_ID = cntry.CNTRY_ID
+        AND CNTRY.REV_ROLLUP_ID = GEO.REV_ROLLUP_ID
+        AND LL.LSTG_TYPE_CODE = FRMT.LSTG_TYPE_CD
+        AND FRMT.BIN_SOLD_IND = -99
+        AND LL.CAL_DT BETWEEN CAST('2016-01-01'AS DATE) AND CAST('2016-01-12' AS DATE)
+        GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14
+    
+    UNION ALL
+    
+      SELECT
+             lstg.CMN_MTRC_COUNT_DT AS CAL_DT
+            ,GEO.GLBL_RPRT_GEO_CD
+            ,CAST(-999 AS DECIMAL(18,0)) AS SLR_ID
+            ,lstg.SLR_CNTRY_ID  
+            ,CAST(NULL AS  DECIMAL(4,0)) AS BYR_CNTRY_ID
+            ,lstg.LEAF_CATEG_ID
+            ,lstg.LSTG_SITE_ID
+            ,'Others'  as LSTG_FORMAT_NAME
+            ,'Not Specified' AS ITEM_CONDITION
+            ,-99 AS FNF_YN_IND
+            ,-99 AS GSP_YN_IND
+            ,-99 AS MOBILE_APP_YN_IND
+            ,-99 as ASP_SGMNT_CD
+            ,-99 as SPS_PRGRM_ID
+            ,sum(lstg.LIVE_LSTG_COUNT) AS LIVE_LSTG_CNT
+      FROM  access_views.DW_GEM2_CMN_ACTVTY_CD   lstg,
+           access_views.dw_countries  cntry,
+           APP_HARMONY_T.GLBL_RPRT_GEO_DIM GEO
+      WHERE
+            lstg.SLR_CNTRY_ID = cntry.CNTRY_ID
+        AND CNTRY.REV_ROLLUP_ID = GEO.REV_ROLLUP_ID
+        AND lstg.LSTG_SITE_ID < 0  -- off platform site_id (-1,-3,-4,-5,-6,-7,-8) -- need double check
+        AND lstg.CMN_MTRC_COUNT_DT  between DATE '2016-01-01' and DATE '2016-01-12' 
+        AND lstg.slr_type_id <> 1
+     GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14
 ;

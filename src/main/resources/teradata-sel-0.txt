@@ -1,0 +1,12 @@
+INSERT INTO DW_MONITOR.DAILY_USER_LONG_GATING SELECT CURRENT_DATE AS CollectDate ,t1.ReportDate ,t1.ReportHour ,t1.CompanyName ,t1.UserName ,t1.DelayTranche ,t1.QueryCount FROM ( SELECT U.CompanyName ,t.username2 AS username ,t.AcctStringDate AS ReportDate ,t.AcctStringHour AS ReportHour ,t.DelayTranche ,SUM(t.QueryCount) AS QueryCount FROM ( SELECT dt.acctstringdate ,dt.acctstringhour , CASE WHEN TRIM(dt.username) LIKE '%Z_dba' ESCAPE 'Z' THEN SUBSTR(dt.username,1,CHARACTERS(TRIM(dt.username))-4) WHEN TRIM(dt.username) LIKE '%Z_pp_m' ESCAPE 'Z' THEN SUBSTR(dt.username,1,CHARACTERS(TRIM(dt.username))-5) WHEN TRIM(dt.username) LIKE '%Z_m' ESCAPE 'Z' THEN SUBSTR(dt.username,1,CHARACTERS(TRIM(dt.username))-2) WHEN TRIM(dt.username) LIKE '%Z_U' ESCAPE 'Z' THEN SUBSTR(dt.username,1,CHARACTERS(TRIM(dt.username))-2) ELSE TRIM(dt.username) END AS username2 ,CASE WHEN (COALESCE(dt.delaytime,0) / 60) < 1 THEN '0 - <1 min' WHEN (COALESCE(dt.delaytime,0) / 60) BETWEEN 1 AND 5 THEN '1 - >1.0 & <=5 mins' WHEN (COALESCE(dt.delaytime,0) / 60) BETWEEN 5.01 AND 20 THEN '2 - >5.0 & <=20 mins' WHEN (COALESCE(dt.delaytime,0) / 60) BETWEEN 20.01 AND 60 THEN '3 - >20.0 & <=60 mins' WHEN (COALESCE(dt.delaytime,0) / 60) BETWEEN 60.01 AND 120 THEN '4 - >1 & <=2 hrs' WHEN (COALESCE(dt.delaytime,0) / 60) > 120 THEN '5 - > 2 hr' ELSE 'Unknown' END AS DelayTranche ,SUM(CASE WHEN (COALESCE(dt.delaytime,0) / 60) > 0 THEN 1 ELSE 0 END) AS QueryCount FROM dw_monitor_views.qrylog_dba_all dt WHERE acctstringdate = CURRENT_DATE - 1 
+-- =========================================================== 
+-- WE CAN DO SOME ROW ELIMINATION HERE 
+-- =========================================================== 
+AND TRIM(dt.ownername) NOT LIKE '%batch%' 
+AND COALESCE(dt.delaytime,0) / 60 > 20 
+-- ============================================================== 
+-- added to prevent failure by JJF 
+-- ============================================================== 
+AND dt.acctstringhour IS NOT NULL GROUP BY 1,2,3,4 ) t 
+INNER JOIN DW_MONITOR_VIEWS.V_DS_USER_MNGR_HRCHY_HIST U ON U.NT_LOGIN = t.username2 
+GROUP BY 1,2,3,4,5 ) t1 ;

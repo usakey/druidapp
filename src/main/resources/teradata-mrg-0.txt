@@ -1,0 +1,6 @@
+MERGE INTO P_Lvis_Dev_T.srm_sources_data vdm 
+USING cases_lvis_item vt ON vdm.case_id_user = vt.case_id_user and vdm.source_id = vt.SOURCE_ID and vdm.case_dt = vt.case_dt 
+WHEN MATCHED THEN 
+UPDATE SET skillset_id = vt.skillset_id, site_id = vt.site_id, score = vt.score, CSR_REVIEW = vt.CSR_REVIEW, CSR_ACTION = vt.CSR_ACTION, IFD_REVIEW = vt.IFD_REVIEW, IFD_ACTION = vt.IFD_ACTION, hit = vt.hit, worked = vt.worked, source_type = vt.source_type 
+WHEN NOT MATCHED THEN 
+INSERT VALUES (case_id_user = vt.case_id_user , numeric_id = vt.numeric_id, user_id = vt.user_id , case_dt = vt.case_dt, source_id = vt.source_id, skillset_id = vt.skillset_id, site_id = vt.site_id, score = vt.score, CSR_REVIEW = vt.CSR_REVIEW, CSR_ACTION = vt.CSR_ACTION, IFD_REVIEW = vt.IFD_REVIEW, IFD_ACTION = vt.IFD_ACTION, hit = vt.hit, worked = vt.worked, source_type = vt.source_type)

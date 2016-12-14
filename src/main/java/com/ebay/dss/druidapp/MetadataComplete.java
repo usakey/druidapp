@@ -17,8 +17,9 @@ public class MetadataComplete {
 		
 	public ArrayList<String> getMetaSchema(String db, String table, Connection connMysqlsa, String platform) throws SQLException{
 		ArrayList<String> metaSchema = new ArrayList<String>();
-		String query = "select columnname from sa.columns where databasename = ? and tablename = ? and system = ?";
-		
+//		String query = "select columnname from dq2.columns where databasename = ? and tablename = ? and system = ?";
+		String query = "select columnname from dq2.columns where databasename = ? and tablename = ? and platform = ? order by columnid;";
+
 		PreparedStatement stmt = connMysqlsa.prepareStatement(query);
 		stmt.setString(1, db);
 		stmt.setString(2, table);

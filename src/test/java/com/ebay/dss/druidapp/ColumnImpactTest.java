@@ -23,7 +23,7 @@ public class ColumnImpactTest {
 		
 		final Connection connection = MetadataComplete.connMysqlDataBase("10.64.255.36","sa","sa","sa");
 		
-		String resource = "teradata-ins-3.txt";
+		String resource = "teradata-mrg-0.txt";
 		String output = "result_test.csv";
 		File file = new File(output);
         BufferedWriter bw = null;
@@ -34,9 +34,14 @@ public class ColumnImpactTest {
 		System.out.println("This file has "+queries.length+" scripts to analyze.");
 		for (String query : queries) {
 		     
-			String ins_sql = prepare.getValidInsertQuery(query+";", "test.sql");
+//			String ins_sql = prepare.getValidInsertQuery(query+";", "test.sql");
+			String ins_sql = prepare.getValidQuery(query+";", "test.sql");
 			TeradataStatementParser parser = new TeradataStatementParser(ins_sql);
 			List<SQLStatement> statementList = parser.parseStatementList();
+			if (statementList.size() == 0) {
+				System.out.println("Cannot parse query as no valide statement in it!");
+				continue;
+			}
 			SQLStatement stmt = statementList.get(0);
 			
 //			getDependMap(stmt);
@@ -53,13 +58,17 @@ public class ColumnImpactTest {
 						+ "tartet_column," 
 						+ "source_database," 
 						+ "source_table," 
-						+ "source_column");
+						+ "source_column,"
+						+ "join_type");
 				bw.newLine();
 				
 				Set<String> tgtKeys = impact.getDependMap().keySet();
 				for(String tgtKey : tgtKeys) {
 					for (String sourceKey : impact.getDependMap().get(tgtKey)) {
 						String[] tgtFullCol = impact.splitByDot(tgtKey);
+						if (tgtFullCol.length == 2) {
+							bw.write("," );	
+						}						
 						for (String tgt : tgtFullCol) {
 							bw.write(tgt.trim() + ",");
 							System.out.print(tgt + ", ");	
